@@ -16,10 +16,12 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-      - name: Install dependencies (root workspace)
+      - name: Install API dependencies
         run: npm install
+        working-directory: ./apps/api
       - name: Run tests
-        run: npm run test:api
+        run: npm test
+        working-directory: ./apps/api
 
   build-web:
     runs-on: ubuntu-latest
@@ -31,8 +33,9 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-      - name: Install dependencies
+      - name: Install web dependencies
         run: npm install
+        working-directory: ./apps/web
       - name: Build web
         run: npm run build
         working-directory: ./apps/web
