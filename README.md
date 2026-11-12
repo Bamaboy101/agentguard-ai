@@ -52,7 +52,11 @@ The live dashboard at **https://bamaboy101.github.io/agentguard-ai/** shows:
 - Incident list with rule, severity, status
 - Audit trail table (actor, action, time, note)
 
-> **Screenshot note:** Browser-based screenshot capture is unavailable in this environment. Visit the live demo above to interact with the dashboard directly.
+## Demo Preview
+
+![Agentguard Dashboard Desktop](./screenshots/desktop.png)
+
+![Agentguard Dashboard Mobile](./screenshots/mobile.png)
 
 ## Features
 
