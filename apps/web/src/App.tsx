@@ -19,6 +19,7 @@ export default function App() {
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [actions, setActions] = useState<Action[]>([])
   const [simLoading, setSimLoading] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const stateColor = (s: string) => s === 'healthy' ? '#16a34a' : s === 'warning' ? '#ca8a04' : '#dc2626'
 
