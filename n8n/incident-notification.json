@@ -1,0 +1,100 @@
+{
+  "name": "AgentGuard AI - Incident Notification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentguard-incident",
+        "responseMode": "lastNode",
+        "responseData": "allEntries"
+      },
+      "name": "Webhook - Incident Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 0,
+      "position": [240, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.severity }}",
+              "operation": "equals",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "name": "Critical Severity Check",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 0,
+      "position": [440, 100]
+    },
+    {
+      "parameters": {
+        "to": "ops-team@example.com",
+        "subject": "AgentGuard AI: CRITICAL Incident Detected",
+        "text": "A critical incident has been detected for service {{ $json.service_id }}. Rule: {{ $json.rule }}. First seen: {{ $json.first_seen_utc }}. Please review immediately in the AgentGuard dashboard."
+      },
+      "name": "Send Critical Alert Email",
+      "type": "n8n-nodes-base.sendEmail",
+      "typeVersion": 1,
+      "position": [640, 100],
+      "credentials": {
+        "smtp": "SMTP Credentials"
+      }
+    },
+    {
+      "parameters": {
+        "to": "ops-team@example.com",
+        "subject": "AgentGuard AI: Incident Detected",
+        "text": "An incident has been detected for service {{ $json.service_id }}. Rule: {{ $json.rule }}. Severity: {{ $json.severity }}. First seen: {{ $json.first_seen_utc }}."
+      },
+      "name": "Send Standard Alert Email",
+      "type": "n8n-nodes-base.sendEmail",
+      "typeVersion": 1,
+      "position": [640, 300],
+      "credentials": {
+        "smtp": "SMTP Credentials"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - Incident Alert": {
+      "main": [
+        [
+          {
+            "node": "Critical Severity Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical Severity Check": {
+      "main": [
+        [
+          {
+            "node": "Send Critical Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Standard Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "triggerCount": 0,
+  "updatedAt": "2026-11-12T19:00:00Z",
+  "createdAt": "2026-11-12T19:00:00Z",
+  "versionId": "1"
+}

@@ -43,18 +43,16 @@ flowchart LR
 
 **Trust boundaries:** External recovery actions disabled; approval is a recorded UI decision. Sensitive headers/payloads are not logged. Collector authenticates event writers via a scoped demo token when not in offline mode.
 
----
+## Demo Preview
 
-## Screenshots
-
-Placeholder screenshots will be added after the first deployment. The live dashboard at `https://bamaboy101.github.io/agentguard-ai/` shows:
+The live dashboard at **https://bamaboy101.github.io/agentguard-ai/** shows:
 
 - Service cards (healthy / warning / critical states)
 - Simulator buttons: heartbeat, stop, failure
 - Incident list with rule, severity, status
 - Audit trail table (actor, action, time, note)
 
----
+> **Screenshot note:** Browser-based screenshot capture is unavailable in this environment. Visit the live demo above to interact with the dashboard directly.
 
 ## Features
 
