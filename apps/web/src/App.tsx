@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 
 const API = import.meta.env.VITE_API_BASE || ''
-const POLL_MS = 3000
 
 type Service = { id: string; name: string; expected_interval_s: number; last_seen_utc: string | null; last_success_utc: string | null; state: string; demo: boolean }
 type Incident = { id: string; service_id: string; rule: string; severity: string; first_seen_utc: string; status: string }
@@ -16,7 +15,7 @@ export default function App() {
 
   useEffect(() => {
     loadAll()
-    const t = setInterval(loadAll, POLL_MS)
+    const t = setInterval(loadAll, 3000)
     return () => clearInterval(t)
   }, [])
 
@@ -62,8 +61,8 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 980, margin: '0 auto', padding: 20 }}>
-      <h1>AgentGuard AI <span style={{ color: '#666', fontSize: 0.6 }}>&bull; demo</span></h1>
-      <p style={{ color: '#555' }}>Monitoring, incident detection and safe recovery. Heartbeat &rarr; incident &rarr; alert &rarr; human decision.</p>
+      <h1>AgentGuard AI <span style={{ color: '#666', fontSize: 0.6 }}>• demo</span></h1>
+      <p style={{ color: '#555' }}>Monitoring, incident detection and safe recovery. Heartbeat → incident → alert → human decision.</p>
       {error && <span style={{ color: '#dc2626' }}>{error}</span>}
 
       <section style={{ marginTop: 16 }}>
