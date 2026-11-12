@@ -36,6 +36,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: 'npm'
       - name: Install web dependencies
         run: npm install
         working-directory: ./apps/web
@@ -52,6 +53,6 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./apps/web
+          path: ./apps/web/dist
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4

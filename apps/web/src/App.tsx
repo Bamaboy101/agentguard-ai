@@ -1,69 +1,95 @@
 import { useState, useEffect } from 'react'
 
-const API = import.meta.env.VITE_API_BASE || ''
-
-type Service = { id: string; name: string; expected_interval_s: number; last_seen_utc: string | null; last_success_utc: string | null; state: string; demo: boolean }
+type Service = { id: string; name: string; expected_interval_s: number; last_seen_utc: string | null; state: string; demo: boolean }
 type Incident = { id: string; service_id: string; rule: string; severity: string; first_seen_utc: string; status: string }
 type Action = { id: string; incident_id: string; actor: string; action: string; approved_utc: string; audit_note: string | null }
 
+const SERVICES: Service[] = [
+  { id: 'svc-demo-web', name: 'demo-web', expected_interval_s: 30, last_seen_utc: null, state: 'healthy', demo: true },
+  { id: 'svc-demo-worker', name: 'demo-worker', expected_interval_s: 60, last_seen_utc: null, state: 'healthy', demo: true }
+]
+
+function sha256(input: string): Promise<string> {
+  const buf = crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
+  return buf.then(b => Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join(''))
+}
+
 export default function App() {
-  const [services, setServices] = useState<Service[]>([])
+  const [services, setServices] = useState<Service[]>(SERVICES)
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [actions, setActions] = useState<Action[]>([])
-  const [error, setError] = useState<string | null>(null)
   const [simLoading, setSimLoading] = useState<string | null>(null)
-
-  useEffect(() => {
-    loadAll()
-    const t = setInterval(loadAll, 3000)
-    return () => clearInterval(t)
-  }, [])
-
-  async function loadAll() {
-    try {
-      const [s, i, a] = await Promise.all([
-        fetch(`${API}/api/services`).then(r => r.json()),
-        fetch(`${API}/api/incidents`).then(r => r.json()),
-        fetch(`${API}/api/actions`).then(r => r.json())
-      ])
-      setServices(s)
-      setIncidents(i)
-      setActions(a)
-    } catch (e) {
-      setError(String(e))
-    }
-  }
-
-  async function sim(kind: 'heartbeat' | 'stop' | 'failure', serviceId: string) {
-    setSimLoading(serviceId)
-    try {
-      await fetch(`${API}/api/demo/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service_id: serviceId }) })
-      await loadAll()
-    } finally {
-      setSimLoading(null)
-    }
-  }
-
-  async function decide(incidentId: string, action: 'ack' | 'resolve', actor = 'operator-1') {
-    try {
-      if (action === 'ack') {
-        await fetch(`${API}/api/incidents/${incidentId}/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor }) })
-      } else {
-        await fetch(`${API}/api/incidents/${incidentId}/resolve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor, note: 'resolved via demo' }) })
-      }
-      await loadAll()
-    } catch (e) {
-      setError(String(e))
-    }
-  }
 
   const stateColor = (s: string) => s === 'healthy' ? '#16a34a' : s === 'warning' ? '#ca8a04' : '#dc2626'
 
+  async function heartbeat(serviceId: string) {
+    setSimLoading(serviceId)
+    try {
+      setServices(services.map(s => {
+        if (s.id !== serviceId) return s
+        return { ...s, last_seen_utc: new Date().toISOString(), state: 'healthy' }
+      }))
+    } finally { setSimLoading(null) }
+  }
+
+  async function stopService(serviceId: string) {
+    setSimLoading(serviceId)
+    try {
+      setServices(services.map(s => s.id === serviceId ? { ...s, state: 'warning' } : s))
+      setServices(services.map(s => s.id === serviceId ? { ...s, last_seen_utc: new Date(Date.now() - 120_000).toISOString() } : s))
+    } finally { setSimLoading(null) }
+  }
+
+  async function failure(serviceId: string) {
+    setSimLoading(serviceId)
+    try {
+      setServices(services.map(s => s.id === serviceId ? { ...s, state: 'critical' } : s))
+      // Check burst rule: if 3+ failures, create incident
+      const failCount = (services.filter(s => s.id === serviceId && s.state === 'critical').length || 0) + 1
+      if (failCount >= 3) {
+        const existing = incidents.find(i => i.service_id === serviceId && i.rule === 'burst-failure' && i.status === 'open')
+        if (!existing) {
+          const newIncident: Incident = {
+            id: `inc:${Date.now()}`, service_id: serviceId, rule: 'burst-failure',
+            severity: 'high', first_seen_utc: new Date().toISOString(), status: 'open'
+          }
+          setIncidents([newIncident, ...incidents])
+        }
+      }
+    } finally { setSimLoading(null) }
+  }
+
+  async function acknowledge(incidentId: string) {
+    setServices(services)
+    setIncidents(incidents.map(i => i.id === incidentId ? { ...i, status: 'acknowledged' } : i))
+    const inc = incidents.find(i => i.id === incidentId)
+    if (inc) {
+      const action: Action = { id: `act:${Date.now()}`, incident_id: incidentId, actor: 'operator-1', action: 'acknowledge', approved_utc: new Date().toISOString(), audit_note: 'Manual acknowledgment via UI' }
+      setActions([action, ...actions])
+    }
+  }
+
+  async function resolve(incidentId: string) {
+    setIncidents(incidents.map(i => i.id === incidentId ? { ...i, status: 'resolved' } : i))
+    const inc = incidents.find(i => i.id === incidentId)
+    if (inc) {
+      const action: Action = { id: `act:${Date.now()}`, incident_id: incidentId, actor: 'operator-1', action: 'resolve', approved_utc: new Date().toISOString(), audit_note: 'Resolved via demo' }
+      setActions([action, ...actions])
+    }
+  }
+
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 980, margin: '0 auto', padding: 20 }}>
-      <h1>AgentGuard AI <span style={{ color: '#666', fontSize: 0.6 }}>• demo</span></h1>
-      <p style={{ color: '#555' }}>Monitoring, incident detection and safe recovery. Heartbeat → incident → alert → human decision.</p>
-      {error && <span style={{ color: '#dc2626' }}>{error}</span>}
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
+        <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #ef4444, #f97316)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 800, fontSize: 18 }}>AG</div>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>AgentGuard AI</h1>
+          <p style={{ margin: 0, color: '#666', fontSize: 13 }}>Monitoring, incident detection & safe recovery</p>
+          <span style={{ display: 'inline-block', marginTop: 6, padding: '2px 8px', border: '1px solid #ef4444', borderRadius: 10, fontSize: 11, color: '#ef4444' }}>Demo data</span>
+        </div>
+      </header>
+
+      {error && <span style={{ color: '#dc2626', marginBottom: 12 }}>{error}</span>}
 
       <section style={{ marginTop: 16 }}>
         <h2>Services</h2>
@@ -77,9 +103,9 @@ export default function App() {
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 0.8, background: stateColor(s.state) + '22', color: stateColor(s.state), fontWeight: 600 }}>{s.state}</span>
-                <button onClick={() => sim('heartbeat', s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'heartbeat'}</button>
-                <button onClick={() => sim('stop', s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'stop'}</button>
-                <button onClick={() => sim('failure', s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'fail'}</button>
+                <button onClick={() => heartbeat(s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'heartbeat'}</button>
+                <button onClick={() => stopService(s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'stop'}</button>
+                <button onClick={() => failure(s.id)} disabled={simLoading === s.id} style={{ padding: '4px 8px', fontSize: 0.85 }}>{simLoading === s.id ? '…' : 'fail'}</button>
               </div>
             </div>
           ))}
@@ -111,8 +137,8 @@ export default function App() {
                   <td style={{ padding: 4, fontSize: 0.85, textAlign: 'right' }}>
                     {inc.status === 'open' && (
                       <>
-                        <button onClick={() => decide(inc.id, 'ack')} style={{ marginRight: 4, padding: '2px 6px', fontSize: 0.8 }}>ack</button>
-                        <button onClick={() => decide(inc.id, 'resolve')} style={{ padding: '2px 6px', fontSize: 0.8 }}>resolve</button>
+                        <button onClick={() => acknowledge(inc.id)} style={{ marginRight: 4, padding: '2px 6px', fontSize: 0.8 }}>ack</button>
+                        <button onClick={() => resolve(inc.id)} style={{ padding: '2px 6px', fontSize: 0.8 }}>resolve</button>
                       </>
                     )}
                   </td>
@@ -124,7 +150,7 @@ export default function App() {
       </section>
 
       <section style={{ marginTop: 24 }}>
-        <h2>Audit trail</h2>
+        <h2>Audit Trail</h2>
         {actions.length === 0 ? <p>No actions yet.</p> : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
