@@ -1,0 +1,161 @@
+{
+  "name": "AgentGuard AI - Heartbeat Monitor & Incident Detection",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentguard-heartbeat",
+        "responseMode": "lastNode",
+        "responseData": "allEntries"
+      },
+      "name": "Heartbeat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 100]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "url": "http://localhost:4001/api/events",
+        "jsonParameters": true,
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersJson": "{
+          \"service_id\": \"={{ $json.service_id }}\",
+          \"run_id\": \"={{ $json.run_id }}\"
+        }"
+      },
+      "name": "Forward to AgentGuard API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [460, 100],
+      "errorWorkflow": {
+        "nodes": [
+          {
+            "parameters": {
+              "message": \"Error processing heartbeat: {{ $error.message }}\",
+              "text": \"Error processing heartbeat for service {{ $json.service_id }}: {{ $error.message }}\"
+            },
+            "name": "Send Error Alert",
+            "type": "n8n-nodes-base.sendEmail",
+            "typeVersion": 1,
+            "position": [700, 200],
+            "credentials": {
+              "smtp": "smtp-credentials"
+            }
+          }
+        ],
+        "name": "Error Handler",
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 0,
+        "position": [580, 200]
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equals",
+              "value2": "critical"
+            },
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equals",
+              "value2": "warning"
+            }
+          ]
+        },
+        "options": {
+          "failOnError": false
+        }
+      },
+      "name": "Service Status Check",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [640, 100]
+    },
+    {
+      "parameters": {
+        "to": "ops-team@example.com",
+        "subject": "AgentGuard AI - Service Alert: {{ $json.service_id }}",
+        "text": "Service {{ $json.service_id }} status changed to {{ $json.state }}. Last seen: {{ $json.last_seen_utc }}."
+      },
+      "name": "Send Service Alert",
+      "type": "n8n-nodes-base.sendEmail",
+      "typeVersion": 1,
+      "position": [840, 100],
+      "credentials": {
+        "smtp": "smtp-credentials"
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "url": "http://localhost:4001/api/incidents",
+        "jsonParameters": true,
+        "bodyParametersJson": "{
+          \"service_id\": \"={{ $json.service_id }}\",
+          \"rule\": \"missed-heartbeat\",
+          \"severity\": \"={{ $json.severity }}\"
+        }"
+      },
+      "name": "Create Incident",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [840, -100],
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Heartbeat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Forward to AgentGuard API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to AgentGuard API": {
+      "main": [
+        [
+          {
+            "node": "Service Status Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Service Status Check": {
+      "main": [
+        [
+          {
+            "node": "Send Service Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "triggerCount": 0,
+  "updatedAt": "2026-11-13T00:00:00Z",
+  "createdAt": "2026-11-12T00:00:00Z",
+  "versionId": "1"
+}
