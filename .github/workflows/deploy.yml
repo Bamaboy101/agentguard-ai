@@ -15,7 +15,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm'
       - name: Install API dependencies
         run: npm install
         working-directory: ./apps/api
@@ -32,7 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm'
       - name: Install web dependencies
         run: npm install
         working-directory: ./apps/web
