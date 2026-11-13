@@ -1,141 +1,92 @@
 # AgentGuard AI
 
-Monitoring, incident detection and safe recovery (MVP).
+Automated agents fail silently. AgentGuard makes heartbeats observable, turns repeated failures into a single deduplicated incident, and keeps a human-approved audit trail.
 
-## Live Demo
+**Live application: https://bamaboy101.github.io/agentguard-ai/** — open it in any browser. No login, no installation, no local server.
 
-🌐 **[Open the interactive dashboard →](https://bamaboy101.github.io/agentguard-ai/)**
-
-No setup, no credentials, no backend required. Runs entirely in your browser with labeled synthetic data.
-
----
-
-## What It Delivers
-
-A developer can run fake failing workflows, watch an incident appear, and see an auditable response path on a local dashboard.
-
-**Heartbeat → Incident → Alert → Human Decision.**
-
-- Service registry with heartbeat intake and last-seen health
-- Missed-heartbeat and burst-failure detection with deduplication
-- Incident lifecycle: open → acknowledge → resolve, with audit trail (actor/time/reason)
-- Demo simulator: start/stop/fail a heartbeat emitter and watch incidents fire
-- Runbook suggestions and manual acknowledge/resolve controls
-- React dashboard with service health, incidents and audit timeline
-- **No remote shell, reboot, or production restart**
-
----
+| | |
+|---|---|
+| Frontend | https://bamaboy101.github.io/agentguard-ai/ |
+| Backend API | https://agentguard-api.marketmesh-api.workers.dev |
+| API health | https://agentguard-api.marketmesh-api.workers.dev/api/health |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A[Heartbeat Emitter] --> B[Event Intake API]
-    B --> C[Service Health State]
-    C --> D[Incident Rules: missed-heartbeat / burst-failure]
-    D --> E[Incident + Dedupe]
-    E --> F[Acknowledge / Resolve]
-    F --> G[Audit Trail: actor + time + reason]
-    G --> H[React/Vite Dashboard]
-    style D fill:#fecaca,stroke:#dc2626
-    style H fill:#dbeafe,stroke:#2563eb
+  B[Browser] --> P["GitHub Pages<br/>apps/web/index.html"]
+  P -->|"HTTPS + x-demo-session"| W["Cloudflare Worker<br/>Hono API"]
+  W --> D[("Cloudflare D1")]
 ```
 
-**Trust boundaries:** External recovery actions disabled; approval is a recorded UI decision. Sensitive headers/payloads are not logged. Collector authenticates event writers via a scoped demo token when not in offline mode.
+The frontend is a single self-contained `apps/web/index.html` (React and Tailwind from CDN). There is **no build step**, so the committed file is exactly what is served — this removes any drift between source and deployment.
 
-## Demo Preview
+Three independent GitHub Actions workflows:
 
-The live dashboard at **https://bamaboy101.github.io/agentguard-ai/** shows:
-
-- Service cards (healthy / warning / critical states)
-- Simulator buttons: heartbeat, stop, failure
-- Incident list with rule, severity, status
-- Audit trail table (actor, action, time, note)
-
-## Demo Preview
-
-![Agentguard Dashboard Desktop](./screenshots/desktop.png)
-
-![Agentguard Dashboard Mobile](./screenshots/mobile.png)
-
-## Features
-
-| Feature | Status |
+| Workflow | Purpose |
 |---|---|
-| Service registry + heartbeat intake | ✅ Verified |
-| Missed-heartbeat detection | ✅ Verified |
-| Burst-failure detection + dedupe | ✅ Verified |
-| Incident lifecycle (open→ack→resolve) | ✅ Verified |
-| Audit trail (actor/time/reason) | ✅ Verified |
-| Demo simulator | ✅ Verified |
-| No remote shell / reboot / auto-restart | ✅ By design |
+| `pages.yml` | Publishes `apps/web/index.html` to GitHub Pages and verifies the *published* HTML references the Worker |
+| `ci.yml` | API typecheck (`tsc --noEmit`) and unit tests (`vitest`) with committed lockfiles |
+| `e2e.yml` | Headless Chromium against the **live public URL**; uploads desktop + mobile screenshots, Playwright report, network/console diagnostics |
 
----
+Frontend deployment is deliberately decoupled from backend tests, so a failing test can never take the public site down.
 
-## Installation
+## Verified features
+
+- Service registry with last-seen heartbeat state
+- Controlled heartbeat, stop and failure actions against seeded demo services
+- Burst-failure detection: three failures inside ten minutes open exactly one incident (deduplicated)
+- Acknowledge → Resolve lifecycle; Resolve stays reachable after acknowledgement
+- Audit trail of every acknowledgement and resolution, persisted per visitor
+
+## Technologies
+
+React (CDN) + Tailwind standalone frontend · Cloudflare Worker (Hono) · Cloudflare D1
+
+## Running locally
 
 ```bash
-# Clone
-git clone https://github.com/bamaboy101/agentguard-ai.git
-cd agentguard-ai
-
-# Backend
-cd apps/api
-npm install          # dev deps include vitest
-npm test             # 3 tests pass
-npm run dev          # API on :4001
-
-# Frontend (new terminal)
-cd ../web
-npm install
-npm run dev          # Dashboard on :5174
-
-# Docker (optional, once Docker daemon available)
-cd ../.. && docker compose up --build
+git clone https://github.com/Bamaboy101/agentguard-ai.git
+cd agentguard-ai/apps/api
+npm ci
+npm test            # unit tests
+npm run build       # typecheck
+npx wrangler dev    # API on http://localhost:8787
 ```
 
-Copy `.env.example` to `.env`. Demo needs no credentials.
+Serve `apps/web/index.html` with any static server to run the frontend locally.
 
----
+### Browser acceptance tests
 
-## Configuration
+```bash
+cd e2e
+npm ci
+npx playwright install chromium
+APP_NAME=agentguard-ai WORKER_BASE=https://agentguard-api.marketmesh-api.workers.dev npx playwright test
+```
 
-| Variable | Purpose | Required |
-|---|---|---|
-| `PORT` | API port (default 4001) | No |
-| `EVENT_WRITE_TOKEN` | Optional scoped token for event writers | No |
-| `N8N_WEBHOOK_URL` | Optional alert webhook target | No |
+Tests run against the deployed public URL by default and write screenshots to `e2e/screenshots/`.
 
-No credentials are hardcoded, logged, or committed.
+## Security and data isolation
 
----
+- **Anonymous sessions.** The Worker issues an opaque UUID session id; the browser stores it in `localStorage` and sends it as `x-demo-session`. Every record is stamped with that id and every read is filtered by it, so two different browsers never see each other's records, while a reload keeps your own history. Verified with two independent browser contexts.
+- **Rate limiting.** 120 requests/minute per session; exceeding it returns `429` with `Retry-After`.
+- **Request size ceiling.** Bodies above 512 KiB are rejected with `413`.
+- **CORS allowlist.** Only the published GitHub Pages origin (and local dev origins) receive `Access-Control-Allow-Origin`; arbitrary origins receive none.
+- **Input validation.** All write endpoints validate required fields and return `400` with a JSON error.
+- **No secrets in the frontend.** The published HTML contains no API keys, tokens or credentials.
 
-## Limitations
+## Limitations and honest scope
 
-- Webhook/Telegram delivery with cooldown not included
-- Real n8n workflows not included
-- Multi-tenant controls and SLO views not included
-- No remote shell, reboot, or production restart
+- Demo controls only ever address seeded `svc-demo-*` services. No private or production infrastructure is reachable.
+- No remote shell, reboot or automatic remediation — recovery is a human decision recorded in the audit log.
+- Missed-heartbeat state is derived from recorded heartbeats; the demo does not run background schedulers.
 
----
+## Test evidence
 
-## Security
-
-- **Recovery actions require explicit approval.** No remote shell, reboot, or production restart.
-- **External recovery actions disabled at MVP.**
-- **Sensitive headers/payloads are not logged.**
-- See `docs/security.md` for details.
-
----
-
-## Demo
-
-🌐 **[AgentGuard Live Demo](https://bamaboy101.github.io/agentguard-ai/)** — browser-based, no setup, labeled synthetic data.
-
-View source: `https://github.com/bamaboy101/agentguard-ai`
-
----
+CI, deployment and browser-acceptance runs — including screenshots and Playwright reports — are published as GitHub Actions artifacts on every run:
+**https://github.com/Bamaboy101/agentguard-ai/actions**
 
 ## License
 
-[MIT](LICENSE)
+MIT
