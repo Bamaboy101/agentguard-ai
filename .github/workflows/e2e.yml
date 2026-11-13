@@ -1,0 +1,61 @@
+name: Browser Acceptance (live)
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy Live Frontend"]
+    types: [completed]
+  schedule:
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-live
+  cancel-in-progress: false
+
+jobs:
+  browser:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_NAME: agentguard-ai
+      WORKER_BASE: https://agentguard-api.marketmesh-api.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install test dependencies
+        working-directory: e2e
+        run: npm ci
+      - name: Install headless Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run browser acceptance against the public URL
+        working-directory: e2e
+        run: npx playwright test
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ env.APP_NAME }}
+          path: e2e/screenshots/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload Playwright report and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ env.APP_NAME }}
+          path: |
+            e2e/playwright-report/
+            e2e/results.json
+            e2e/diagnostics/
+            e2e/test-results/
+          if-no-files-found: warn
+          retention-days: 30

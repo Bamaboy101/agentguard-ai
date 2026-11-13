@@ -1,0 +1,16 @@
+{
+  "name": "@agentguard/e2e",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Headless Chromium acceptance tests against the live public deployment",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}

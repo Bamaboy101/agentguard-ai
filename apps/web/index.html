@@ -19,13 +19,51 @@
 
       const API_BASE = 'https://agentguard-api.marketmesh-api.workers.dev';
 
+      // ---- Anonymous session -------------------------------------------------
+      // The server issues an opaque session id; we persist it per browser profile
+      // so a reload keeps the same visitor identity, while a different browser
+      // (or private window) gets its own isolated records.
+      const SESSION_KEY = 'demo-session-id';
+      let SESSION_ID = null;
+      try { SESSION_ID = localStorage.getItem(SESSION_KEY); } catch (e) {}
+
+      function adoptSession(res) {
+        const issued = res.headers.get('x-demo-session');
+        if (issued && issued !== SESSION_ID) {
+          SESSION_ID = issued;
+          try { localStorage.setItem(SESSION_KEY, issued); } catch (e) {}
+        }
+      }
+
+      function sessionHeaders(extra) {
+        const h = Object.assign({}, extra || {});
+        if (SESSION_ID) h['x-demo-session'] = SESSION_ID;
+        return h;
+      }
+
       async function api(path, opts = {}) {
-        const res = await fetch(`${API_BASE}${path}`, {
-          ...opts,
-          headers: { 'Content-Type': 'application/json', ...opts.headers }
-        });
-        if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
+        const headers = sessionHeaders(opts.headers);
+        // Let the browser set the multipart boundary for FormData bodies.
+        if (!(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+        const res = await fetch(`${API_BASE}${path}`, Object.assign({}, opts, { headers }));
+        adoptSession(res);
+        if (!res.ok) {
+          let detail = '';
+          try { const j = await res.json(); detail = j.error || j.message || ''; } catch (e) {}
+          throw new Error(`${res.status} ${detail || res.statusText} (${path})`);
+        }
         return res.json();
+      }
+
+      function ErrorBanner({ error, onDismiss }) {
+        if (!error) return null;
+        return React.createElement('div', {
+          role: 'alert', 'data-testid': 'error-banner',
+          className: 'mb-4 p-3 rounded-lg border border-red-300 bg-red-50 text-red-800 text-sm flex justify-between items-start gap-3'
+        },
+          React.createElement('span', null, 'Request failed: ' + error),
+          React.createElement('button', { onClick: onDismiss, className: 'underline shrink-0' }, 'Dismiss')
+        );
       }
 
       const SERVICES = [
@@ -108,6 +146,7 @@
         const [incidents, setIncidents] = useState([]);
         const [actions, setActions] = useState([]);
         const [loading, setLoading] = useState(false);
+        const [error, setError] = useState(null);
 
         useEffect(() => {
           load();
@@ -125,7 +164,7 @@
             setServices(svcs);
             setIncidents(incs);
             setActions(acts);
-          } catch (e) { console.error(e); }
+          } catch (e) { setError(String(e.message || e)); }
         }
 
         const onHeartbeat = async (id) => {
@@ -173,6 +212,7 @@
             )
           ),
           React.createElement('div', { className: 'max-w-7xl mx-auto px-4 py-6' },
+            React.createElement(ErrorBanner, { error: error, onDismiss: () => setError(null) }),
             React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6' },
               React.createElement('div', { className: 'lg:col-span-3' },
                 React.createElement('div', { className: 'bg-white rounded-lg shadow-sm border p-6' },

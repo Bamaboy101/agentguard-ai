@@ -1,0 +1,72 @@
+name: Deploy Live Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/index.html"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify frontend source
+        run: |
+          test -f apps/web/index.html
+          grep -q "workers.dev" apps/web/index.html
+          echo "API base referenced by frontend:"
+          grep -o "API_BASE = '[^']*'" apps/web/index.html
+
+      - name: Prepare deployment artifact
+        run: |
+          mkdir -p public
+          cp apps/web/index.html public/index.html
+          # Standalone frontend: all runtime deps load from public CDNs.
+          # No build step, no local asset bundle required.
+          ls -la public
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Verify published HTML references the Worker API
+        run: |
+          URL="${{ steps.deployment.outputs.page_url }}"
+          echo "Published URL: $URL"
+          for i in $(seq 1 20); do
+            BODY=$(curl -fsSL -H 'Cache-Control: no-cache' "$URL" || true)
+            if echo "$BODY" | grep -q "workers.dev"; then
+              echo "VERIFIED: published HTML contains Worker API reference"
+              echo "$BODY" | grep -o "API_BASE = '[^']*'"
+              exit 0
+            fi
+            echo "attempt $i: published HTML not yet updated, retrying in 10s"
+            sleep 10
+          done
+          echo "FAILED: published HTML does not reference workers.dev"
+          exit 1
