@@ -1,116 +1,187 @@
-import express, { type Request, type Response, type NextFunction } from 'express'
+import express from 'express'
 import cors from 'cors'
-import { z } from 'zod'
-import {
-  listServices, upsertHeartbeat, recordFailure, getService,
-  listIncidents, openIncident, recordAction, listActions, closeIncident,
-  simulateHeartbeat, simulateStop, simulateFailure,
-  acknowledgeIncident, resolveIncident, evaluateRules, db
-} from './engine'
 
 const app = express()
-const PORT = Number(process.env.PORT) || 4001
-
 app.use(cors())
 app.use(express.json())
 
-app.use((_req: Request, _res: Response, next: NextFunction) => {
+app.use((req, res, next) => {
   const start = Date.now()
-  _res.on('finish', () => {
-    console.log(`${_req.method} ${_req.originalUrl} ${_res.statusCode} ${Date.now() - start}ms`)
+  res.on('finish', () => {
+    console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`)
   })
   next()
 })
 
-app.get('/api/health', (_req: Request, res: Response) => {
+type Service = { id: string; name: string; expected_interval_s: number; last_seen_utc: string | null; last_success_utc: string | null; state: string; demo: boolean }
+type Event = { id: string; service_id: string; runId: string | null; event_utc: string; type: string; duration_ms: number | null }
+type Incident = { id: string; service_id: string; rule: string; severity: string; first_seen_utc: string; status: string }
+type Action = { id: string; incident_id: string; actor: string; action: string; approved_utc: string; audit_note: string | null }
+
+const services: Service[] = [
+  { id: 'svc-demo-web', name: 'demo-web', expected_interval_s: 30, last_seen_utc: null, last_success_utc: null, state: 'healthy', demo: true },
+  { id: 'svc-demo-worker', name: 'demo-worker', expected_interval_s: 60, last_seen_utc: null, last_success_utc: null, state: 'healthy', demo: true },
+]
+
+const events: Event[] = []
+const incidents: Incident[] = []
+const actions: Action[] = []
+
+function evaluateRules() {
+  const now = Date.now()
+  for (const svc of services) {
+    if (!svc.last_seen_utc) continue
+    const lastSeen = new Date(svc.last_seen_utc).getTime()
+    const ageMs = now - lastSeen
+    const graceMs = svc.expected_interval_s * 1000 * 2
+    if (ageMs > graceMs) {
+      svc.state = 'critical'
+      openIncident(svc.id, 'missed-heartbeat', 'critical')
+    } else if (ageMs > svc.expected_interval_s * 1000) {
+      svc.state = 'warning'
+    } else {
+      svc.state = 'healthy'
+    }
+  }
+  const windowMs = 10 * 60 * 1000
+  const burstThreshold = 3
+  for (const svc of services) {
+    const cutoff = new Date(now - windowMs).getTime()
+    const failCount = events.filter(e => e.service_id === svc.id && e.type === 'failure' && new Date(e.event_utc).getTime() > cutoff).length
+    if (failCount >= burstThreshold) {
+      openIncident(svc.id, 'burst-failure', 'high')
+    }
+  }
+}
+
+function openIncident(serviceId: string, rule: string, severity: string): Incident | null {
+  const existing = incidents.find(i => i.service_id === serviceId && i.rule === rule && i.status === 'open')
+  if (existing) return null
+  const id = `inc:${crypto.randomUUID()}`
+  const inc: Incident = { id, service_id: serviceId, rule, severity, first_seen_utc: new Date().toISOString(), status: 'open' }
+  incidents.push(inc)
+  return inc
+}
+
+function recordAction(incidentId: string, actor: string, action: string, note: string | null): Action {
+  const id = `act:${crypto.randomUUID()}`
+  const act: Action = { id, incident_id: incidentId, actor, action, approved_utc: new Date().toISOString(), audit_note: note }
+  actions.push(act)
+  return act
+}
+
+function closeIncident(id: string) {
+  const inc = incidents.find(i => i.id === id)
+  if (inc) inc.status = 'resolved'
+}
+
+function getService(id: string) {
+  return services.find(s => s.id === id)
+}
+
+function upsertHeartbeat(serviceId: string, runId: string | null) {
+  const svc = getService(serviceId)
+  if (!svc) return
+  svc.last_seen_utc = new Date().toISOString()
+  svc.last_success_utc = new Date().toISOString()
+  svc.state = 'healthy'
+  events.push({ id: `evt:${crypto.randomUUID()}`, service_id: serviceId, runId, event_utc: new Date().toISOString(), type: 'heartbeat', duration_ms: null })
+  evaluateRules()
+}
+
+function recordFailure(serviceId: string, runId: string | null, durationMs: number | null) {
+  const svc = getService(serviceId)
+  if (!svc) return
+  events.push({ id: `evt:${crypto.randomUUID()}`, service_id: serviceId, runId, event_utc: new Date().toISOString(), type: 'failure', duration_ms: durationMs })
+  evaluateRules()
+}
+
+app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', utc: new Date().toISOString() })
 })
 
-app.get('/api/services', (_req: Request, res: Response) => {
-  res.json(listServices(db))
+app.get('/api/services', (_req, res) => {
+  res.json(services)
 })
 
-app.get('/api/services/:id', (req: Request, res: Response) => {
-  const svc = getService(db, req.params.id)
+app.get('/api/services/:id', (req, res) => {
+  const svc = getService(req.params.id)
   if (!svc) return res.status(404).json({ error: 'service not found' })
   res.json(svc)
 })
 
-const heartbeatBody = z.object({ service_id: z.string().min(1), run_id: z.string().optional() })
-app.post('/api/events', (req: Request, res: Response) => {
-  const parsed = heartbeatBody.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: 'invalid body', issues: parsed.error.flatten() })
-  const { service_id, run_id } = parsed.data
-  const svc = getService(db, service_id)
+app.post('/api/events', (req, res) => {
+  const { service_id, runId } = req.body
+  const svc = getService(service_id)
   if (!svc) return res.status(404).json({ error: 'service not found' })
-  upsertHeartbeat(db, service_id, run_id ?? null)
+  upsertHeartbeat(service_id, runId ?? null)
   evaluateRules()
-  res.json({ ok: true, service: getService(db, service_id) })
+  res.json({ ok: true, service: getService(service_id) })
 })
 
-const failureBody = z.object({ service_id: z.string().min(1), run_id: z.string().optional(), duration_ms: z.number().optional() })
-app.post('/api/events/failure', (req: Request, res: Response) => {
-  const parsed = failureBody.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: 'invalid body', issues: parsed.error.flatten() })
-  const { service_id, run_id, duration_ms } = parsed.data
-  const svc = getService(db, service_id)
+app.post('/api/events/failure', (req, res) => {
+  const { service_id, runId, duration_ms } = req.body
+  const svc = getService(service_id)
   if (!svc) return res.status(404).json({ error: 'service not found' })
-  recordFailure(db, service_id, run_id ?? null, duration_ms ?? null)
+  recordFailure(service_id, runId ?? null, duration_ms ?? null)
   evaluateRules()
-  res.json({ ok: true, service: getService(db, service_id) })
+  res.json({ ok: true, service: getService(service_id) })
 })
 
-app.get('/api/incidents', (_req: Request, res: Response) => {
-  res.json(listIncidents(db))
+app.get('/api/incidents', (_req, res) => {
+  res.json(incidents)
 })
 
-app.post('/api/incidents/:id/ack', (req: Request, res: Response) => {
-  const { actor } = req.body as { actor?: string }
+app.post('/api/incidents/:id/ack', (req, res) => {
+  const { actor } = req.body
   if (!actor) return res.status(400).json({ error: 'actor required' })
-  const result = acknowledgeIncident(req.params.id, actor)
-  if (!result.ok) return res.status(404).json({ error: result.error })
-  res.json(result)
+  const inc = incidents.find(i => i.id === req.params.id)
+  if (!inc) return res.status(404).json({ error: 'incident not found' })
+  recordAction(inc.id, actor, 'acknowledge', 'Manual acknowledgment via UI')
+  inc.status = 'acknowledged'
+  res.json({ ok: true, incident: inc })
 })
 
-app.post('/api/incidents/:id/resolve', (req: Request, res: Response) => {
-  const { actor, note } = req.body as { actor?: string; note?: string }
+app.post('/api/incidents/:id/resolve', (req, res) => {
+  const { actor, note } = req.body
   if (!actor) return res.status(400).json({ error: 'actor required' })
-  const result = resolveIncident(req.params.id, actor, note ?? '')
-  if (!result.ok) return res.status(404).json({ error: result.error })
-  res.json(result)
+  const inc = incidents.find(i => i.id === req.params.id)
+  if (!inc) return res.status(404).json({ error: 'incident not found' })
+  closeIncident(inc.id)
+  recordAction(inc.id, actor, 'resolve', note ?? '')
+  inc.status = 'resolved'
+  res.json({ ok: true, incident: inc })
 })
 
-app.get('/api/actions', (_req: Request, res: Response) => {
-  res.json(listActions(db))
+app.get('/api/actions', (_req, res) => {
+  res.json([...actions].reverse())
 })
 
-// Demo control endpoints (simulator only; not for production)
-app.post('/api/demo/heartbeat', (req: Request, res: Response) => {
-  const { service_id } = req.body as { service_id?: string }
+app.post('/api/demo/heartbeat', (req, res) => {
+  const { service_id } = req.body
   if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  res.json(simulateHeartbeat(service_id))
-})
-app.post('/api/demo/stop', (req: Request, res: Response) => {
-  const { service_id } = req.body as { service_id?: string }
-  if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  res.json(simulateStop(service_id))
-})
-app.post('/api/demo/failure', (req: Request, res: Response) => {
-  const { service_id } = req.body as { service_id?: string }
-  if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  res.json(simulateFailure(service_id))
+  upsertHeartbeat(service_id, `run-${Date.now()}`)
+  res.json({ ok: true, service: getService(service_id) })
 })
 
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ error: 'not found' })
-})
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err)
-  res.status(500).json({ error: 'internal server error' })
+app.post('/api/demo/stop', (req, res) => {
+  const { service_id } = req.body
+  if (!service_id) return res.status(400).json({ error: 'service_id required' })
+  const svc = getService(service_id)
+  if (!svc) return res.status(404).json({ error: 'service not found' })
+  svc.state = 'warning'
+  res.json({ ok: true, service: svc })
 })
 
-app.listen(PORT, () => {
-  console.log(`AgentGuard API listening on :${PORT}`)
+app.post('/api/demo/failure', (req, res) => {
+  const { service_id } = req.body
+  if (!service_id) return res.status(400).json({ error: 'service_id required' })
+  recordFailure(service_id, `run-${Date.now()}`, null)
+  res.json({ ok: true, service: getService(service_id) })
+})
+
+app.listen(4002, () => {
+  console.log('AgentGuard API listening on http://localhost:4002')
 })
 
 export default app
