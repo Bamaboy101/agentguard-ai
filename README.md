@@ -84,7 +84,18 @@ Tests run against the deployed public URL by default and write screenshots to `e
 
 ## Test evidence
 
-CI, deployment and browser-acceptance runs — including screenshots and Playwright reports — are published as GitHub Actions artifacts on every run:
+| Check | Result |
+|---|---|
+| API typecheck + unit tests (`ci.yml`) | passing — 3 unit tests |
+| GitHub Pages deployment (`pages.yml`) | passing — publishes `apps/web/index.html` and verifies the *published* HTML references the Worker |
+| Browser acceptance (`e2e.yml`) | headless Chromium, desktop (1440×900) + mobile (Pixel 7), against the live public URL |
+| Screenshots captured | 14 PNGs (desktop + mobile) uploaded as Actions artifacts |
+| Session isolation | verified with two independent browser contexts |
+| Persistence after reload | verified against the deployed Worker |
+
+Latest browser acceptance run: https://github.com/Bamaboy101/agentguard-ai/actions/runs/43515486863
+
+All runs, Playwright HTML reports, screenshots and network/console diagnostics:
 **https://github.com/Bamaboy101/agentguard-ai/actions**
 
 ## License
