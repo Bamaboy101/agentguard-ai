@@ -4,9 +4,257 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AgentGuard AI — Agent Monitoring & Incident Response</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body { font-family: 'Inter', sans-serif; margin: 0; background: #f9fafb; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="text/javascript">
+      const { useState, useEffect } = React;
+
+      const API_BASE = 'https://agentguard-api.marketmesh-api.workers.dev';
+
+      async function api(path, opts = {}) {
+        const res = await fetch(`${API_BASE}${path}`, {
+          ...opts,
+          headers: { 'Content-Type': 'application/json', ...opts.headers }
+        });
+        if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
+        return res.json();
+      }
+
+      const SERVICES = [
+        { id: 'svc-demo-web', name: 'demo-web', expected_interval_s: 30, state: 'healthy', demo: true },
+        { id: 'svc-demo-worker', name: 'demo-worker', expected_interval_s: 60, state: 'healthy', demo: true },
+      ];
+
+      const STATE_COLOR = { healthy: '#16a34a', warning: '#ca8a04', critical: '#dc2626' };
+
+      function StateBadge({ state }) {
+        const color = STATE_COLOR[state] || STATE_COLOR.healthy;
+        return React.createElement('span', {
+          className: 'px-2 py-0.5 rounded-full text-xs font-medium',
+          style: { backgroundColor: color + '22', color: color }
+        }, state);
+      }
+
+      function ServiceRow({ svc, onHeartbeat, onStop, onFailure }) {
+        return React.createElement('tr', { className: 'border-b last:border-0' },
+          React.createElement('td', { className: 'px-4 py-3 font-medium' }, svc.name),
+          React.createElement('td', { className: 'px-4 py-3 text-sm text-gray-500' }, svc.expected_interval_s + 's'),
+          React.createElement('td', { className: 'px-4 py-3' },
+            React.createElement(StateBadge, { state: svc.state })
+          ),
+          React.createElement('td', { className: 'px-4 py-3 text-sm text-gray-500' },
+            svc.last_seen_utc ? new Date(svc.last_seen_utc).toLocaleTimeString() : '—'
+          ),
+          React.createElement('td', { className: 'px-4 py-3' },
+            React.createElement('div', { className: 'flex gap-2' },
+              React.createElement('button', {
+                onClick: () => onHeartbeat(svc.id),
+                className: 'px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700'
+              }, 'Heartbeat'),
+              React.createElement('button', {
+                onClick: () => onStop(svc.id),
+                className: 'px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700'
+              }, 'Stop'),
+              React.createElement('button', {
+                onClick: () => onFailure(svc.id),
+                className: 'px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700'
+              }, 'Fail')
+            )
+          )
+        );
+      }
+
+      function IncidentCard({ inc, onAck, onResolve }) {
+        return React.createElement('div', { className: 'p-4 rounded-lg border border-gray-200 bg-white' },
+          React.createElement('div', { className: 'flex justify-between items-start mb-2' },
+            React.createElement('div', null,
+              React.createElement('div', { className: 'font-medium' }, inc.rule),
+              React.createElement('div', { className: 'text-xs text-gray-500' }, inc.severity)
+            ),
+            React.createElement('span', {
+              className: 'px-2 py-0.5 rounded-full text-xs font-medium',
+              style: {
+                backgroundColor: inc.status === 'open' ? '#fee2e2' : inc.status === 'acknowledged' ? '#fef3c7' : '#dcfce7',
+                color: inc.status === 'open' ? '#dc2626' : inc.status === 'acknowledged' ? '#ca8a04' : '#16a34a'
+              }
+            }, inc.status)
+          ),
+          React.createElement('div', { className: 'text-xs text-gray-600 mb-3' },
+            'Service: ' + inc.service_id + ' • ' + new Date(inc.first_seen_utc).toLocaleString()
+          ),
+          inc.status === 'open' && React.createElement('div', { className: 'flex gap-2' },
+            React.createElement('button', {
+              onClick: () => onAck(inc.id),
+              className: 'px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700'
+            }, 'Acknowledge'),
+            React.createElement('button', {
+              onClick: () => onResolve(inc.id),
+              className: 'px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700'
+            }, 'Resolve')
+          )
+        );
+      }
+
+      function App() {
+        const [services, setServices] = useState([]);
+        const [incidents, setIncidents] = useState([]);
+        const [actions, setActions] = useState([]);
+        const [loading, setLoading] = useState(false);
+
+        useEffect(() => {
+          load();
+          const id = setInterval(load, 5000);
+          return () => clearInterval(id);
+        }, []);
+
+        async function load() {
+          try {
+            const [svcs, incs, acts] = await Promise.all([
+              api('/api/services'),
+              api('/api/incidents'),
+              api('/api/actions')
+            ]);
+            setServices(svcs);
+            setIncidents(incs);
+            setActions(acts);
+          } catch (e) { console.error(e); }
+        }
+
+        const onHeartbeat = async (id) => {
+          setLoading(true);
+          try {
+            await api(`/api/demo/heartbeat`, { method: 'POST', body: JSON.stringify({ service_id: id }) });
+            load();
+          } finally { setLoading(false); }
+        };
+
+        const onStop = async (id) => {
+          setLoading(true);
+          try {
+            await api(`/api/demo/stop`, { method: 'POST', body: JSON.stringify({ service_id: id }) });
+            load();
+          } finally { setLoading(false); }
+        };
+
+        const onFailure = async (id) => {
+          setLoading(true);
+          try {
+            await api(`/api/demo/failure`, { method: 'POST', body: JSON.stringify({ service_id: id }) });
+            load();
+          } finally { setLoading(false); }
+        };
+
+        const onAck = async (id) => {
+          await api(`/api/incidents/${id}/ack`, { method: 'POST', body: JSON.stringify({ actor: 'recruiter-demo' }) });
+          load();
+        };
+
+        const onResolve = async (id) => {
+          await api(`/api/incidents/${id}/resolve`, { method: 'POST', body: JSON.stringify({ actor: 'recruiter-demo', note: 'Demo resolution' }) });
+          load();
+        };
+
+        return React.createElement('div', { className: 'min-h-screen' },
+          React.createElement('nav', { className: 'bg-white border-b shadow-sm' },
+            React.createElement('div', { className: 'max-w-7xl mx-auto px-4 py-3 flex justify-between items-center' },
+              React.createElement('div', { className: 'flex items-center gap-2' },
+                React.createElement('div', { className: 'w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center text-white font-bold' }, 'A'),
+                React.createElement('span', { className: 'font-bold text-xl text-gray-800' }, 'AgentGuard AI')
+              ),
+              React.createElement('div', { className: 'text-sm text-gray-600' }, 'Demo mode • No real infrastructure')
+            )
+          ),
+          React.createElement('div', { className: 'max-w-7xl mx-auto px-4 py-6' },
+            React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6' },
+              React.createElement('div', { className: 'lg:col-span-3' },
+                React.createElement('div', { className: 'bg-white rounded-lg shadow-sm border p-6' },
+                  React.createElement('h2', { className: 'font-bold text-lg mb-4' }, 'Services'),
+                  React.createElement('div', { className: 'overflow-x-auto' },
+                    React.createElement('table', { className: 'w-full text-sm' },
+                      React.createElement('thead', null,
+                        React.createElement('tr', { className: 'border-b' },
+                          React.createElement('th', { className: 'px-4 py-2 text-left font-semibold text-gray-600' }, 'Name'),
+                          React.createElement('th', { className: 'px-4 py-2 text-left font-semibold text-gray-600' }, 'Interval'),
+                          React.createElement('th', { className: 'px-4 py-2 text-left font-semibold text-gray-600' }, 'State'),
+                          React.createElement('th', { className: 'px-4 py-2 text-left font-semibold text-gray-600' }, 'Last Seen'),
+                          React.createElement('th', { className: 'px-4 py-2 text-left font-semibold text-gray-600' }, 'Controls')
+                        )
+                      ),
+                      React.createElement('tbody', null,
+                        services.length > 0
+                          ? services.map(svc => React.createElement(ServiceRow, {
+                              key: svc.id,
+                              svc: svc,
+                              onHeartbeat: onHeartbeat,
+                              onStop: onStop,
+                              onFailure: onFailure
+                            }))
+                          : React.createElement('tr', null,
+                            React.createElement('td', { colSpan: 5, className: 'px-4 py-4 text-center text-gray-500' }, 'No services')
+                          )
+                      )
+                    )
+                  )
+                )
+              ),
+              React.createElement('div', { className: 'lg:col-span-1' },
+                React.createElement('div', { className: 'bg-white rounded-lg shadow-sm border p-4' },
+                  React.createElement('h3', { className: 'font-bold mb-3' }, 'Quick Actions'),
+                  React.createElement('div', { className: 'space-y-2' },
+                    React.createElement('button', { onClick: load, className: 'w-full py-2 text-sm border rounded hover:bg-gray-50' }, 'Refresh')
+                  )
+                )
+              )
+            ),
+            React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
+              React.createElement('div', { className: 'lg:col-span-2' },
+                React.createElement('div', { className: 'bg-white rounded-lg shadow-sm border p-4' },
+                  React.createElement('h2', { className: 'font-bold mb-4' }, 'Incidents'),
+                  React.createElement('div', { className: 'space-y-3' },
+                    incidents.length > 0
+                      ? incidents.map(inc => React.createElement(IncidentCard, {
+                          key: inc.id,
+                          inc: inc,
+                          onAck: onAck,
+                          onResolve: onResolve
+                        }))
+                      : React.createElement('div', { className: 'text-center py-8 text-gray-400 text-sm' }, 'No incidents. Use the demo controls to trigger one.')
+                  )
+                )
+              ),
+              React.createElement('div', { className: 'lg:col-span-1' },
+                React.createElement('div', { className: 'bg-white rounded-lg shadow-sm border p-4' },
+                  React.createElement('h2', { className: 'font-bold mb-4' }, 'Audit Trail'),
+                  React.createElement('div', { className: 'space-y-3 max-h-64 overflow-y-auto' },
+                    actions.length > 0
+                      ? actions.map(a => React.createElement('div', {
+                          key: a.id,
+                          className: 'p-3 rounded border bg-gray-50 text-xs'
+                        },
+                          React.createElement('div', { className: 'font-medium' }, a.action),
+                          React.createElement('div', { className: 'text-gray-600' }, a.actor),
+                          React.createElement('div', { className: 'text-gray-400' }, new Date(a.approved_utc).toLocaleTimeString()),
+                          a.audit_note && React.createElement('div', { className: 'text-gray-500 mt-1' }, a.audit_note)
+                        ))
+                      : React.createElement('div', { className: 'text-center py-4 text-gray-400 text-sm' }, 'No actions yet')
+                  )
+                )
+              )
+            )
+          )
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(App));
+    </script>
   </body>
 </html>
