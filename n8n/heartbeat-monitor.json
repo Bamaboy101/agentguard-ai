@@ -1,5 +1,5 @@
 {
-  "name": "AgentGuard AI - Heartbeat Monitor & Incident Detection",
+  "name": "AgentGuard AI - Heartbeat Monitor",
   "nodes": [
     {
       "parameters": {
@@ -16,53 +16,26 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "url": "http://localhost:4001/api/events",
+        "url": "http://host.docker.internal:4001/api/events",
         "jsonParameters": true,
-        "options": {
-          "bodyContentType": "json"
-        },
-        "bodyParametersJson": "{
-          \"service_id\": \"={{ $json.service_id }}\",
-          \"run_id\": \"={{ $json.run_id }}\"
-        }"
+        "bodyParametersJson": "{ \"service_id\": \"{{ $json.service_id }}\", \"run_id\": \"{{ $json.run_id }}\" }"
       },
-      "name": "Forward to AgentGuard API",
+      "name": "Forward to AgentGuard",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [460, 100],
-      "errorWorkflow": {
-        "nodes": [
-          {
-            "parameters": {
-              "message": \"Error processing heartbeat: {{ $error.message }}\",
-              "text": \"Error processing heartbeat for service {{ $json.service_id }}: {{ $error.message }}\"
-            },
-            "name": "Send Error Alert",
-            "type": "n8n-nodes-base.sendEmail",
-            "typeVersion": 1,
-            "position": [700, 200],
-            "credentials": {
-              "smtp": "smtp-credentials"
-            }
-          }
-        ],
-        "name": "Error Handler",
-        "type": "n8n-nodes-base.errorTrigger",
-        "typeVersion": 0,
-        "position": [580, 200]
-      }
+      "position": [460, 100]
     },
     {
       "parameters": {
         "conditions": {
           "string": [
             {
-              "value1": "={{ $json.status }}",
+              "value1": "{{ $json.state }}",
               "operation": "equals",
               "value2": "critical"
             },
             {
-              "value1": "={{ $json.status }}",
+              "value1": "{{ $json.state }}",
               "operation": "equals",
               "value2": "warning"
             }
@@ -72,7 +45,7 @@
           "failOnError": false
         }
       },
-      "name": "Service Status Check",
+      "name": "Check Service Status",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 1,
       "position": [640, 100]
@@ -80,33 +53,16 @@
     {
       "parameters": {
         "to": "ops-team@example.com",
-        "subject": "AgentGuard AI - Service Alert: {{ $json.service_id }}",
-        "text": "Service {{ $json.service_id }} status changed to {{ $json.state }}. Last seen: {{ $json.last_seen_utc }}."
+        "subject": "AgentGuard: Service Alert {{ $json.service_id }}",
+        "text": "Service {{ $json.service_id }} is {{ $json.state }}. Last seen: {{ $json.last_seen_utc }}."
       },
-      "name": "Send Service Alert",
+      "name": "Send Alert",
       "type": "n8n-nodes-base.sendEmail",
       "typeVersion": 1,
       "position": [840, 100],
       "credentials": {
         "smtp": "smtp-credentials"
       }
-    },
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "url": "http://localhost:4001/api/incidents",
-        "jsonParameters": true,
-        "bodyParametersJson": "{
-          \"service_id\": \"={{ $json.service_id }}\",
-          \"rule\": \"missed-heartbeat\",
-          \"severity\": \"={{ $json.severity }}\"
-        }"
-      },
-      "name": "Create Incident",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 1,
-      "position": [840, -100],
-      "credentials": {}
     }
   ],
   "connections": {
@@ -114,36 +70,29 @@
       "main": [
         [
           {
-            "node": "Forward to AgentGuard API",
+            "node": "Forward to AgentGuard",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Forward to AgentGuard API": {
+    "Forward to AgentGuard": {
       "main": [
         [
           {
-            "node": "Service Status Check",
+            "node": "Check Service Status",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Service Status Check": {
+    "Check Service Status": {
       "main": [
         [
           {
-            "node": "Send Service Alert",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Create Incident",
+            "node": "Send Alert",
             "type": "main",
             "index": 0
           }
