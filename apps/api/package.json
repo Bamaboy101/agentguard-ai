@@ -1,30 +1,27 @@
 {
   "name": "@agentguard/api",
   "version": "0.1.0",
-  "description": "AgentGuard AI backend API",
+  "private": true,
+  "description": "AgentGuard AI backend API (Cloudflare Worker + D1)",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "build": "tsc --noEmit",
-    "test": "vitest run",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "d1:create": "wrangler d1 create agentguard-db",
+    "d1:execute": "wrangler d1 execute agentguard-db --file=./schema.sql",
+    "test": "vitest run"
   },
   "dependencies": {
-    "cors": "^2.8.6",
-    "express": "^5.3.0",
     "hono": "^4.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/node": "^26.6.6",
-    "tsx": "^4.0.0",
+    "@types/node": "^20.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.0.0",
     "wrangler": "^4.0.0"
-  },
-  "private": true
+  }
 }

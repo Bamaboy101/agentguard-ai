@@ -1,0 +1,11 @@
+name = "agentguard-api"
+main = "apps/api/src/index.ts"
+compatibility_date = "2026-11-13"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agentguard-db"
+database_id = "eda2c5ee-46c2-431b-b980-67f1008b176b"
+
+[vars]
+MODE = "demo"

@@ -1,187 +1,194 @@
-import express from 'express'
-import cors from 'cors'
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 
-const app = express()
-app.use(cors())
-app.use(express.json())
+const app = new Hono<{ Bindings: { DB: D1Database } }>()
 
-app.use((req, res, next) => {
+app.use('*', cors())
+app.use('*', async (c, next) => {
   const start = Date.now()
-  res.on('finish', () => {
-    console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`)
-  })
-  next()
+  await next()
+  console.log(`${c.req.method} ${c.req.path} ${c.res.status} ${Date.now() - start}ms`)
 })
 
-type Service = { id: string; name: string; expected_interval_s: number; last_seen_utc: string | null; last_success_utc: string | null; state: string; demo: boolean }
-type Event = { id: string; service_id: string; runId: string | null; event_utc: string; type: string; duration_ms: number | null }
-type Incident = { id: string; service_id: string; rule: string; severity: string; first_seen_utc: string; status: string }
-type Action = { id: string; incident_id: string; actor: string; action: string; approved_utc: string; audit_note: string | null }
+async function parseBody(c: any): Promise<any> {
+  try {
+    const body = await c.req.raw.json()
+    if (typeof body === 'object' && body !== null && !Array.isArray(body)) return body
+    return {}
+  } catch (e) { return {} }
+}
 
-const services: Service[] = [
-  { id: 'svc-demo-web', name: 'demo-web', expected_interval_s: 30, last_seen_utc: null, last_success_utc: null, state: 'healthy', demo: true },
-  { id: 'svc-demo-worker', name: 'demo-worker', expected_interval_s: 60, last_seen_utc: null, last_success_utc: null, state: 'healthy', demo: true },
-]
+app.get('/api/health', (c) => {
+  return c.json({ status: 'ok', mode: 'cloudflare', utc: new Date().toISOString() })
+})
 
-const events: Event[] = []
-const incidents: Incident[] = []
-const actions: Action[] = []
-
-function evaluateRules() {
-  const now = Date.now()
-  for (const svc of services) {
-    if (!svc.last_seen_utc) continue
-    const lastSeen = new Date(svc.last_seen_utc).getTime()
-    const ageMs = now - lastSeen
-    const graceMs = svc.expected_interval_s * 1000 * 2
-    if (ageMs > graceMs) {
-      svc.state = 'critical'
-      openIncident(svc.id, 'missed-heartbeat', 'critical')
-    } else if (ageMs > svc.expected_interval_s * 1000) {
-      svc.state = 'warning'
-    } else {
-      svc.state = 'healthy'
+app.get('/api/services', async (c) => {
+  try {
+    if (c.env.DB) {
+      const result = await c.env.DB.prepare(`SELECT * FROM services`).all()
+      return c.json(result.results || [])
     }
-  }
-  const windowMs = 10 * 60 * 1000
-  const burstThreshold = 3
-  for (const svc of services) {
-    const cutoff = new Date(now - windowMs).getTime()
-    const failCount = events.filter(e => e.service_id === svc.id && e.type === 'failure' && new Date(e.event_utc).getTime() > cutoff).length
-    if (failCount >= burstThreshold) {
-      openIncident(svc.id, 'burst-failure', 'high')
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json([])
+})
+
+app.get('/api/services/:id', async (c) => {
+  try {
+    if (c.env.DB) {
+      const svc = await c.env.DB.prepare(`SELECT * FROM services WHERE id=?`).bind(c.req.param('id')).first() as any
+      if (svc) return c.json(svc)
     }
-  }
-}
-
-function openIncident(serviceId: string, rule: string, severity: string): Incident | null {
-  const existing = incidents.find(i => i.service_id === serviceId && i.rule === rule && i.status === 'open')
-  if (existing) return null
-  const id = `inc:${crypto.randomUUID()}`
-  const inc: Incident = { id, service_id: serviceId, rule, severity, first_seen_utc: new Date().toISOString(), status: 'open' }
-  incidents.push(inc)
-  return inc
-}
-
-function recordAction(incidentId: string, actor: string, action: string, note: string | null): Action {
-  const id = `act:${crypto.randomUUID()}`
-  const act: Action = { id, incident_id: incidentId, actor, action, approved_utc: new Date().toISOString(), audit_note: note }
-  actions.push(act)
-  return act
-}
-
-function closeIncident(id: string) {
-  const inc = incidents.find(i => i.id === id)
-  if (inc) inc.status = 'resolved'
-}
-
-function getService(id: string) {
-  return services.find(s => s.id === id)
-}
-
-function upsertHeartbeat(serviceId: string, runId: string | null) {
-  const svc = getService(serviceId)
-  if (!svc) return
-  svc.last_seen_utc = new Date().toISOString()
-  svc.last_success_utc = new Date().toISOString()
-  svc.state = 'healthy'
-  events.push({ id: `evt:${crypto.randomUUID()}`, service_id: serviceId, runId, event_utc: new Date().toISOString(), type: 'heartbeat', duration_ms: null })
-  evaluateRules()
-}
-
-function recordFailure(serviceId: string, runId: string | null, durationMs: number | null) {
-  const svc = getService(serviceId)
-  if (!svc) return
-  events.push({ id: `evt:${crypto.randomUUID()}`, service_id: serviceId, runId, event_utc: new Date().toISOString(), type: 'failure', duration_ms: durationMs })
-  evaluateRules()
-}
-
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', utc: new Date().toISOString() })
+  } catch (e) { console.error('D1 error:', e) }
+  return c.status(404).json({ error: 'service not found' })
 })
 
-app.get('/api/services', (_req, res) => {
-  res.json(services)
+app.post('/api/events', async (c) => {
+  const body = await parseBody(c) as { service_id?: string; run_id?: string }
+  const { service_id, run_id } = body
+  const now = new Date().toISOString()
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO services (id, name, expected_interval_s, last_seen_utc, last_success_utc, state, demo) VALUES (?,?,?,?,?,?,?)`
+      ).bind(service_id, service_id.replace('svc-', ''), 30, now, now, 'healthy', 1).run()
+      await c.env.DB.prepare(
+        `INSERT INTO events (id, service_id, run_id, event_utc, type, duration_ms) VALUES (?,?,?,?,?,?)`
+      ).bind(`evt:${crypto.randomUUID()}`, service_id, run_id, now, 'heartbeat', null).run()
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, service: { id: service_id, state: 'healthy' } })
 })
 
-app.get('/api/services/:id', (req, res) => {
-  const svc = getService(req.params.id)
-  if (!svc) return res.status(404).json({ error: 'service not found' })
-  res.json(svc)
+app.post('/api/events/failure', async (c) => {
+  const body = await parseBody(c) as { service_id?: string; run_id?: string; duration_ms?: number }
+  const { service_id, run_id, duration_ms } = body
+  const now = new Date().toISOString()
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(
+        `INSERT INTO events (id, service_id, run_id, event_utc, type, duration_ms) VALUES (?,?,?,?,?,?)`
+      ).bind(`evt:${crypto.randomUUID()}`, service_id, run_id, now, 'failure', duration_ms).run()
+      const cutoff = new Date(now.getTime() - 10 * 60 * 1000).toISOString()
+      const row = await c.env.DB.prepare(
+        `SELECT COUNT(*) AS c FROM events WHERE service_id=? AND type='failure' AND event_utc > ?`
+      ).bind(service_id, cutoff).first() as { c: number }
+      if (row && row.c >= 3) {
+        const existing = await c.env.DB.prepare(
+          `SELECT 1 FROM incidents WHERE service_id=? AND rule=? AND status='open' LIMIT 1`
+        ).bind(service_id, 'burst-failure').first()
+        if (!existing) {
+          await c.env.DB.prepare(
+            `INSERT INTO incidents (id, service_id, rule, severity, first_seen_utc, status) VALUES (?,?,?,?,?,'open')`
+          ).bind(`inc:${crypto.randomUUID()}`, service_id, 'burst-failure', 'high', now).run()
+        }
+      }
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, service: { id: service_id, state: 'healthy' } })
 })
 
-app.post('/api/events', (req, res) => {
-  const { service_id, runId } = req.body
-  const svc = getService(service_id)
-  if (!svc) return res.status(404).json({ error: 'service not found' })
-  upsertHeartbeat(service_id, runId ?? null)
-  evaluateRules()
-  res.json({ ok: true, service: getService(service_id) })
+app.get('/api/incidents', async (c) => {
+  try {
+    if (c.env.DB) {
+      const result = await c.env.DB.prepare(`SELECT * FROM incidents ORDER BY first_seen_utc DESC LIMIT 50`).all()
+      return c.json(result.results || [])
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json([])
 })
 
-app.post('/api/events/failure', (req, res) => {
-  const { service_id, runId, duration_ms } = req.body
-  const svc = getService(service_id)
-  if (!svc) return res.status(404).json({ error: 'service not found' })
-  recordFailure(service_id, runId ?? null, duration_ms ?? null)
-  evaluateRules()
-  res.json({ ok: true, service: getService(service_id) })
+app.post('/api/incidents/:id/ack', async (c) => {
+  const body = await parseBody(c) as { actor?: string }
+  const { actor } = body
+  if (!actor) return c.status(400).json({ error: 'actor required' })
+  const id = c.req.param('id')
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(`UPDATE incidents SET status='acknowledged' WHERE id=?`).bind(id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO actions (id, incident_id, actor, action, approved_utc, audit_note) VALUES (?,?,?,?,?,?)`
+      ).bind(`act:${crypto.randomUUID()}`, id, actor, 'acknowledge', new Date().toISOString(), 'Manual acknowledgment via UI').run()
+      return c.json({ ok: true, incident: { id, status: 'acknowledged' } })
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, incident: { id, status: 'acknowledged' } })
 })
 
-app.get('/api/incidents', (_req, res) => {
-  res.json(incidents)
+app.post('/api/incidents/:id/resolve', async (c) => {
+  const body = await parseBody(c) as { actor?: string; note?: string }
+  const { actor, note } = body
+  if (!actor) return c.status(400).json({ error: 'actor required' })
+  const id = c.req.param('id')
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(`UPDATE incidents SET status='resolved' WHERE id=?`).bind(id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO actions (id, incident_id, actor, action, approved_utc, audit_note) VALUES (?,?,?,?,?,?)`
+      ).bind(`act:${crypto.randomUUID()}`, id, actor, 'resolve', new Date().toISOString(), note ?? '').run()
+      return c.json({ ok: true, incident: { id, status: 'resolved' } })
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, incident: { id, status: 'resolved' } })
 })
 
-app.post('/api/incidents/:id/ack', (req, res) => {
-  const { actor } = req.body
-  if (!actor) return res.status(400).json({ error: 'actor required' })
-  const inc = incidents.find(i => i.id === req.params.id)
-  if (!inc) return res.status(404).json({ error: 'incident not found' })
-  recordAction(inc.id, actor, 'acknowledge', 'Manual acknowledgment via UI')
-  inc.status = 'acknowledged'
-  res.json({ ok: true, incident: inc })
+app.get('/api/actions', async (c) => {
+  try {
+    if (c.env.DB) {
+      const result = await c.env.DB.prepare(`SELECT * FROM actions ORDER BY approved_utc DESC LIMIT 50`).all()
+      return c.json(result.results || [])
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json([])
 })
 
-app.post('/api/incidents/:id/resolve', (req, res) => {
-  const { actor, note } = req.body
-  if (!actor) return res.status(400).json({ error: 'actor required' })
-  const inc = incidents.find(i => i.id === req.params.id)
-  if (!inc) return res.status(404).json({ error: 'incident not found' })
-  closeIncident(inc.id)
-  recordAction(inc.id, actor, 'resolve', note ?? '')
-  inc.status = 'resolved'
-  res.json({ ok: true, incident: inc })
+app.post('/api/demo/heartbeat', async (c) => {
+  const body = await parseBody(c) as { service_id?: string }
+  if (!body.service_id) return c.status(400).json({ error: 'service_id required' })
+  try {
+    if (c.env.DB) {
+      const now = new Date().toISOString()
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO services (id, name, expected_interval_s, last_seen_utc, last_success_utc, state, demo) VALUES (?,?,?,?,?,?,?)`
+      ).bind(body.service_id, body.service_id.replace('svc-', ''), 30, now, now, 'healthy', 1).run()
+      await c.env.DB.prepare(
+        `INSERT INTO events (id, service_id, run_id, event_utc, type, duration_ms) VALUES (?,?,?,?,?,?)`
+      ).bind(`evt:${crypto.randomUUID()}`, body.service_id, `run-${Date.now()}`, now, 'heartbeat', null).run()
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, service: { id: body.service_id, state: 'healthy' } })
 })
 
-app.get('/api/actions', (_req, res) => {
-  res.json([...actions].reverse())
+app.post('/api/demo/stop', async (c) => {
+  const body = await parseBody(c) as { service_id?: string }
+  if (!body.service_id) return c.status(400).json({ error: 'service_id required' })
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(`UPDATE services SET state='warning' WHERE id=?`).bind(body.service_id).run()
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, service: { id: body.service_id, state: 'warning' } })
 })
 
-app.post('/api/demo/heartbeat', (req, res) => {
-  const { service_id } = req.body
-  if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  upsertHeartbeat(service_id, `run-${Date.now()}`)
-  res.json({ ok: true, service: getService(service_id) })
+app.post('/api/demo/failure', async (c) => {
+  const body = await parseBody(c) as { service_id?: string }
+  if (!body.service_id) return c.status(400).json({ error: 'service_id required' })
+  try {
+    if (c.env.DB) {
+      await c.env.DB.prepare(
+        `INSERT INTO events (id, service_id, run_id, event_utc, type, duration_ms) VALUES (?,?,?,?,?,?)`
+      ).bind(`evt:${crypto.randomUUID()}`, body.service_id, `run-${Date.now()}`, new Date().toISOString(), 'failure', null).run()
+    }
+  } catch (e) { console.error('D1 error:', e) }
+  return c.json({ ok: true, service: { id: body.service_id, state: 'healthy' } })
 })
 
-app.post('/api/demo/stop', (req, res) => {
-  const { service_id } = req.body
-  if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  const svc = getService(service_id)
-  if (!svc) return res.status(404).json({ error: 'service not found' })
-  svc.state = 'warning'
-  res.json({ ok: true, service: svc })
+app.onError((err, c) => {
+  console.error(err)
+  return c.status(500).json({ error: 'internal server error' })
 })
 
-app.post('/api/demo/failure', (req, res) => {
-  const { service_id } = req.body
-  if (!service_id) return res.status(400).json({ error: 'service_id required' })
-  recordFailure(service_id, `run-${Date.now()}`, null)
-  res.json({ ok: true, service: getService(service_id) })
-})
-
-app.listen(4002, () => {
-  console.log('AgentGuard API listening on http://localhost:4002')
+app.notFound((c) => {
+  return c.status(404).json({ error: 'not found' })
 })
 
 export default app
