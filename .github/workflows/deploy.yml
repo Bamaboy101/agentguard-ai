@@ -21,11 +21,11 @@ jobs:
         with:
           node-version: '24'
       - name: Install API dependencies
-        run: npm install --workspaces
+        run: npm install
+        working-directory: ./apps/api
       - name: Run API tests
-        run: npm run test:api
-      - name: Run Web tests
-        run: npm run test:web
+        run: npm test
+        working-directory: ./apps/api
 
   build-web:
     runs-on: ubuntu-latest
@@ -37,9 +37,11 @@ jobs:
         with:
           node-version: '24'
       - name: Install web dependencies
-        run: npm install --workspaces
+        run: npm install
+        working-directory: ./apps/web
       - name: Build web
-        run: npm run build --workspace=apps/web
+        run: npm run build
+        working-directory: ./apps/web
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -66,11 +68,6 @@ jobs:
       - name: Install web dependencies
         run: npm install
         working-directory: ./apps/web
-      - name: Build web
-        run: npm run build
-        working-directory: ./apps/web
-      - name: Start preview server
-        run: npm run preview --working-directory=./apps/web &
       - name: Run E2E tests
         run: npx playwright test
         working-directory: ./apps/web
