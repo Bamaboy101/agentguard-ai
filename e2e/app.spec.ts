@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { instrument, openApp, shoot, dumpDiagnostics, WORKER } from './helpers'
+import { instrument, openApp, shoot, dumpDiagnostics, expectWorkerCall, WORKER } from './helpers'
 
 test.describe('AgentGuard AI — live public acceptance', () => {
   test('heartbeat → controlled failure → incident → acknowledge → resolve → audit persists', async ({ page, browser }, testInfo) => {
@@ -10,7 +10,7 @@ test.describe('AgentGuard AI — live public acceptance', () => {
     await expect(page).toHaveTitle(/AgentGuard/i)
     await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible()
     await expect(page.getByText('demo-web').first()).toBeVisible({ timeout: 45_000 })
-    expect(probe.workerCalls.some((c) => c.url.endsWith('/api/services') && c.status === 200)).toBeTruthy()
+    await expectWorkerCall(probe.workerCalls, '/api/services')
     await shoot(page, '01-services', project)
 
     const row = page.locator('tr', { hasText: 'demo-web' }).first()

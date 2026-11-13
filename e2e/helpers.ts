@@ -55,4 +55,19 @@ export async function freshVisitor(context: BrowserContext) {
   return page
 }
 
+
+/** Wait until the page has actually called a Worker endpoint successfully. */
+export async function expectWorkerCall(
+  calls: { url: string; status: number; method: string }[],
+  match: string,
+  method = 'GET',
+) {
+  await expect
+    .poll(() => calls.some((c) => c.url.includes(match) && c.status === 200 && c.method === method), {
+      timeout: 45_000,
+      intervals: [500, 1000, 2000],
+    })
+    .toBeTruthy()
+}
+
 export { expect }
